@@ -16,6 +16,8 @@ interface RedisConstants {
 	// redis properties
 	final String HOSTS = "redis.hosts";
 	final String CLUSTER_ENABLED = "redis.cluster.enabled";
+	final String SENTINEL_ENABLED = "redis.sentinel.enabled";
+	final String SENTINEL_MASTER = "redis.sentinel.master";
 
 	final String MAX_ACTIVE = "redis.max.active";
 	final String TEST_ONBORROW = "redis.test.onBorrow";
@@ -40,6 +42,8 @@ interface RedisConstants {
 	final String DEFAULT_TEST_NUMPEREVICTION_VALUE = "10";
 	final String DEFAULT_TIME_BETWEENEVICTION_VALUE = "60000";
 	final String DEFAULT_CLUSTER_ENABLED = "false";
+	final String DEFAULT_SENTINEL_ENABLED = "false";
+	final String DEFAULT_SENTINEL_MASTER = "mymaster";
 
 	final String CONN_FAILED_RETRY_MSG = "Jedis connection failed, retrying...";
 }

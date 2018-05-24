@@ -15,12 +15,7 @@ import java.util.Set;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
-import redis.clients.jedis.HostAndPort;
-import redis.clients.jedis.Jedis;
-import redis.clients.jedis.JedisCluster;
-import redis.clients.jedis.JedisPool;
-import redis.clients.jedis.JedisPoolConfig;
-import redis.clients.jedis.Protocol;
+import redis.clients.jedis.*;
 import redis.clients.jedis.exceptions.JedisClusterMaxRedirectionsException;
 import redis.clients.jedis.exceptions.JedisConnectionException;
 import tomcat.request.session.SessionConstants;
@@ -98,6 +93,7 @@ public class RedisDataCache implements DataCache {
 		Properties properties = loadProperties();
 
 		boolean clusterEnabled = Boolean.valueOf(properties.getProperty(RedisConstants.CLUSTER_ENABLED, RedisConstants.DEFAULT_CLUSTER_ENABLED));
+		boolean sentinelEnabled = Boolean.valueOf(properties.getProperty(RedisConstants.SENTINEL_ENABLED, RedisConstants.DEFAULT_SENTINEL_ENABLED));
 
 		String hosts = properties.getProperty(RedisConstants.HOSTS, Protocol.DEFAULT_HOST.concat(":").concat(String.valueOf(Protocol.DEFAULT_PORT)));
 		Collection<? extends Serializable> nodes = getJedisNodes(hosts, clusterEnabled);
@@ -112,7 +108,11 @@ public class RedisDataCache implements DataCache {
 
 		if (clusterEnabled) {
 			dataCache = new RedisClusterCacheUtil((Set<HostAndPort>) nodes, password, timeout, getPoolConfig(properties));
-		} else {
+		}else if(sentinelEnabled){
+			String master = String.valueOf(properties.getProperty(RedisConstants.SENTINEL_MASTER, RedisConstants.DEFAULT_SENTINEL_MASTER));
+			dataCache = new RedisSentinelCacheUtil(master,
+					hosts, password, database, timeout, getPoolConfig(properties));
+		}else {
 			dataCache = new RedisCacheUtil(((List<String>) nodes).get(0),
 					Integer.parseInt(((List<String>) nodes).get(1)), password, database, timeout, getPoolConfig(properties));
 		}
@@ -235,6 +235,146 @@ public class RedisDataCache implements DataCache {
 		public RedisCacheUtil(String host, int port, String password, int database, int timeout,
 				JedisPoolConfig poolConfig) {
 			pool = new JedisPool(poolConfig, host, port, timeout, password, database);
+		}
+
+		/** {@inheritDoc} */
+		@Override
+		public byte[] set(String key, byte[] value) {
+			int tries = 0;
+			boolean sucess = false;
+			String retVal = null;
+			do {
+				tries++;
+				try {
+					Jedis jedis = pool.getResource();
+					retVal = jedis.set(key.getBytes(), value);
+					jedis.close();
+					sucess = true;
+				} catch (JedisConnectionException ex) {
+					log.error(RedisConstants.CONN_FAILED_RETRY_MSG + tries);
+					if (tries == NUM_RETRIES)
+						throw ex;
+				}
+			} while (!sucess && tries <= NUM_RETRIES);
+			return (retVal != null) ? retVal.getBytes() : null;
+		}
+
+		/** {@inheritDoc} */
+		@Override
+		public Long setnx(String key, byte[] value) {
+			int tries = 0;
+			boolean sucess = false;
+			Long retVal = null;
+			do {
+				tries++;
+				try {
+					Jedis jedis = pool.getResource();
+					retVal = jedis.setnx(key.getBytes(), value);
+					jedis.close();
+					sucess = true;
+				} catch (JedisConnectionException ex) {
+					log.error(RedisConstants.CONN_FAILED_RETRY_MSG + tries);
+					if (tries == NUM_RETRIES)
+						throw ex;
+				}
+			} while (!sucess && tries <= NUM_RETRIES);
+			return retVal;
+		}
+
+		/** {@inheritDoc} */
+		@Override
+		public Long expire(String key, int seconds) {
+			int tries = 0;
+			boolean sucess = false;
+			Long retVal = null;
+			do {
+				tries++;
+				try {
+					Jedis jedis = pool.getResource();
+					retVal = jedis.expire(key, seconds);
+					jedis.close();
+					sucess = true;
+				} catch (JedisConnectionException ex) {
+					log.error(RedisConstants.CONN_FAILED_RETRY_MSG + tries);
+					if (tries == NUM_RETRIES)
+						throw ex;
+				}
+			} while (!sucess && tries <= NUM_RETRIES);
+			return retVal;
+		}
+
+		/** {@inheritDoc} */
+		@Override
+		public byte[] get(String key) {
+			int tries = 0;
+			boolean sucess = false;
+			byte[] retVal = null;
+			do {
+				tries++;
+				try {
+					Jedis jedis = pool.getResource();
+					retVal = jedis.get(key.getBytes());
+					jedis.close();
+					sucess = true;
+				} catch (JedisConnectionException ex) {
+					log.error(RedisConstants.CONN_FAILED_RETRY_MSG + tries);
+					if (tries == NUM_RETRIES)
+						throw ex;
+				}
+			} while (!sucess && tries <= NUM_RETRIES);
+			return retVal;
+		}
+
+		/** {@inheritDoc} */
+		@Override
+		public Long delete(String key) {
+			int tries = 0;
+			boolean sucess = false;
+			Long retVal = null;
+			do {
+				tries++;
+				try {
+					Jedis jedis = pool.getResource();
+					retVal = jedis.del(key);
+					jedis.close();
+					sucess = true;
+				} catch (JedisConnectionException ex) {
+					log.error(RedisConstants.CONN_FAILED_RETRY_MSG + tries);
+					if (tries == NUM_RETRIES)
+						throw ex;
+				}
+			} while (!sucess && tries <= NUM_RETRIES);
+			return retVal;
+		}
+	}
+
+
+	/**
+	 * Tomcat clustering with Redis data-cache implementation.
+	 *
+	 * Redis stand-alone mode data-cache implementation.
+	 *
+	 * @author Ranjith Manickam
+	 * @since 2.0
+	 */
+	private class RedisSentinelCacheUtil implements DataCache {
+
+		private JedisSentinelPool pool;
+
+		private static final int NUM_RETRIES = 3;
+
+		private Log log = LogFactory.getLog(RedisCacheUtil.class);
+
+
+		public RedisSentinelCacheUtil(String sentinelmaster, String hosts, String password, int database, int timeout,
+							  JedisPoolConfig poolConfig) {
+			Set<String> sentinels = new HashSet<>(16);
+			String[] servers = hosts.split(",");
+			for (String server:servers) {
+				sentinels.add(server);
+			}
+			pool = new JedisSentinelPool(sentinelmaster,sentinels,poolConfig,timeout,password,database);
+
 		}
 
 		/** {@inheritDoc} */
